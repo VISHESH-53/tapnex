@@ -1,53 +1,106 @@
 import streamlit as st
-from langchain.text_splitter import CharacterTextSplitter
-from langchain.vectorstores import FAISS
-from langchain.embeddings.openai import OpenAIEmbeddings
-from langchain.chat_models import ChatOpenAI
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import FAISS
+from langchain_community.embeddings import OpenAIEmbeddings
+from langchain_community.chat_models import ChatOpenAI
 from langchain.chains import RetrievalQA
+from langchain.docstore.document import Document
 
-# ---------- Load Knowledge Base ----------
-with open("knowledge_base.txt", "r") as f:
-    text = f.read()
+import os
 
-# ---------- Split Documents ----------
-text_splitter = CharacterTextSplitter(
-    separator="\n",
-    chunk_size=300,
-    chunk_overlap=50
+# -------------------------
+# OpenAI Key
+# -------------------------
+os.environ["OPENAI_API_KEY"] = "YOUR_API_KEY"
+
+# -------------------------
+# Streamlit UI
+# -------------------------
+st.title("🤖 TapNex AI Customer Support Agent")
+
+st.write(
+    "Ask questions about TapNex services such as NFC payments, recharge systems, "
+    "event technology services, and refund policies."
 )
 
-docs = text_splitter.create_documents([text])
+# -------------------------
+# Load Knowledge Base
+# -------------------------
+@st.cache_resource
+def load_vector_store():
 
-# ---------- Create Embeddings ----------
-embeddings = OpenAIEmbeddings()
+    with open("knowledge_base.txt", "r", encoding="utf-8") as f:
+        text = f.read()
 
-# ---------- Vector Database ----------
-vectorstore = FAISS.from_documents(docs, embeddings)
+    documents = [Document(page_content=text)]
 
-retriever = vectorstore.as_retriever()
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=500,
+        chunk_overlap=100
+    )
 
-# ---------- LLM ----------
+    docs = splitter.split_documents(documents)
+
+    embeddings = OpenAIEmbeddings()
+
+    vector_store = FAISS.from_documents(docs, embeddings)
+
+    return vector_store
+
+
+vector_store = load_vector_store()
+
+retriever = vector_store.as_retriever(search_kwargs={"k":3})
+
+# -------------------------
+# LLM
+# -------------------------
 llm = ChatOpenAI(
-    model_name="gpt-3.5-turbo",
+    model="gpt-3.5-turbo",
     temperature=0
 )
 
-qa_chain = RetrievalQA.from_chain_type(
+qa = RetrievalQA.from_chain_type(
     llm=llm,
-    retriever=retriever
+    retriever=retriever,
+    return_source_documents=True
 )
 
-# ---------- Streamlit UI ----------
-st.title("🤖 TapNex AI Customer Support")
+# -------------------------
+# Chat Memory
+# -------------------------
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-st.write("Ask questions about TapNex services")
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-query = st.text_input("Enter your question")
+# -------------------------
+# User Query
+# -------------------------
+if prompt := st.chat_input("Ask about TapNex..."):
 
-if st.button("Ask AI"):
+    st.session_state.messages.append(
+        {"role": "user", "content": prompt}
+    )
 
-    if query:
-        response = qa_chain.run(query)
+    with st.chat_message("user"):
+        st.markdown(prompt)
 
-        st.write("### AI Response")
-        st.write(response)
+    result = qa(prompt)
+
+    answer = result["result"]
+    sources = result["source_documents"]
+
+    response = answer + "\n\n**Sources:**\n"
+
+    for doc in sources:
+        response += "- TapNex Knowledge Base\n"
+
+    with st.chat_message("assistant"):
+        st.markdown(response)
+
+    st.session_state.messages.append(
+        {"role": "assistant", "content": response}
+    )
